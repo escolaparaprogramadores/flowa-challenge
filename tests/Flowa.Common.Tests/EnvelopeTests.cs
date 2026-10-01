@@ -381,6 +381,38 @@ public sealed class EnvelopeTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ErrorEnvelopeBuiltByRouteKeepsItsCodeAndMessage()
+    {
+        var (response, body) = await server.SendAsync(HttpMethod.Get, "/api/route-error-envelope");
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+        Assert.Equal(JsonValueKind.Null, body.GetProperty("data").ValueKind);
+        Assert.Equal("OFFER_CLOSED", body.GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal("Oferta encerrada.", body.GetProperty("error").GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task SuccessEnvelopeWithErrorStatusBecomesErrorEnvelope()
+    {
+        var (response, body) = await server.SendAsync(HttpMethod.Get, "/api/success-envelope-with-409");
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal(JsonValueKind.Null, body.GetProperty("data").ValueKind);
+        Assert.Equal("CONFLICT", body.GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal("Conflito com o estado atual do recurso.", body.GetProperty("error").GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task InformationalStatusWrittenByRouteBecomes200Envelope()
+    {
+        var (response, body) = await server.SendAsync(HttpMethod.Get, "/api/informational-status");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("CPAB07", body.GetProperty("data").GetProperty("code").GetString());
+        Assert.Equal(JsonValueKind.Null, body.GetProperty("error").ValueKind);
+    }
+
+    [Fact]
     public async Task DtoFieldNamedLocationIsDataNotHeader()
     {
         var (response, body) = await server.SendAsync(HttpMethod.Get, "/api/dto-with-location");

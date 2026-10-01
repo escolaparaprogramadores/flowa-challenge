@@ -110,6 +110,13 @@ public sealed class FlowaTestServer : IAsyncDisposable
         api.MapGet("/not-found", () => TypedResults.NotFound());
         api.MapGet("/conflict", () => TypedResults.Conflict("Estoque insuficiente."));
         api.MapGet("/problem", () => TypedResults.Problem(detail: "Oferta encerrada.", statusCode: 422));
+        api.MapGet("/route-error-envelope", () => TypedResults.Json(Envelope.Failure("OFFER_CLOSED", "Oferta encerrada."), statusCode: 422));
+        api.MapGet("/success-envelope-with-409", () => TypedResults.Json(Envelope.Success(new OfferQuantity("HZUR41", 3)), statusCode: 409));
+        api.MapGet("/informational-status", (HttpContext context) =>
+        {
+            context.Response.StatusCode = StatusCodes.Status100Continue;
+            return new OfferQuantity("CPAB07", 6);
+        });
         api.MapGet("/problem-404", () => TypedResults.Problem(statusCode: 404));
         api.MapGet("/dto-with-location", () => new BranchOffice("Centro", "São Paulo"));
         api.MapGet("/problem-title", () => TypedResults.Problem(title: "Prospecto não aceito.", statusCode: 400));

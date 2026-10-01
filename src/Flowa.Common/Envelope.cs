@@ -117,7 +117,8 @@ public sealed class EnvelopeFilter : IEndpointFilter
         {
             HttpValidationProblemDetails validation => ValidationError(validation.Errors),
             _ when status >= 500 => ErrorFromStatus(status),
-            Envelope routeEnvelope => routeEnvelope,
+            // Envelope de erro montado pela rota mantém código e mensagem; um de sucesso com status de erro não vale.
+            Envelope { Error: not null } routeEnvelope => routeEnvelope,
             ProblemDetails problem => ErrorFromStatus(status, RouteWrittenText(problem, status)),
             string errorText => ErrorFromStatus(status, errorText),
             _ => ErrorFromStatus(status),
