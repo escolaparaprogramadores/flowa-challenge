@@ -34,7 +34,8 @@ consome (frontend, gateway, CloudFront e teste de carga).
   `UNAUTHORIZED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `METHOD_NOT_ALLOWED` (405),
   `CONFLICT` (409), `UNPROCESSABLE_ENTITY` (422), `TOO_MANY_REQUESTS` (429),
   `SERVICE_UNAVAILABLE` (503), `INTERNAL_ERROR` (demais 5xx) e `REQUEST_ERROR` (outros 4xx).
-  `error.message` é o texto que vai para a tela, em português. Erro 5xx sempre leva a mensagem
+  `error.message` é o texto que vai para a tela, em português. `details[].field` é o nome do campo no JSON
+  (camelCase, ex.: `order.offerCode`). Erro 5xx sempre leva a mensagem
   genérica, sem detalhe interno nem stack trace.
 - **Sem 204:** rota que não devolve dado responde 200 com `data: null`. Texto puro vai em `data`.
   Só arquivo, redirecionamento e 304 saem sem envelope (nenhuma rota abaixo usa).

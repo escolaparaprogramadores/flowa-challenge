@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -10,7 +11,17 @@ using Microsoft.Extensions.Logging;
 
 namespace Flowa.Common.Tests;
 
-public sealed record Item(string Code, int Quantity);
+public sealed record OfferQuantity(string Code, int Quantity);
+
+/// <summary>Pedido com regras de DataAnnotations, validado pela validação nativa do .NET 10 (AddValidation).</summary>
+public sealed class ReservationRequest
+{
+    [Required(ErrorMessage = "Informe a oferta.")]
+    public string? OfferCode { get; set; }
+
+    [Range(1, 100000, ErrorMessage = "A quantidade deve estar entre 1 e 100000.")]
+    public int Quantity { get; set; }
+}
 
 /// <summary>Serviço mínimo em memória, registrado como um serviço do flowa registraria a lib.</summary>
 public sealed class FlowaTestServer : IAsyncDisposable
@@ -21,13 +32,13 @@ public sealed class FlowaTestServer : IAsyncDisposable
 
     public HttpClient Client { get; }
     public InMemoryLoggerProvider Logs { get; }
-    public OutgoingRequestRecorder Outgoing { get; }
+    public OutgoingRequestRecorder OutgoingRequests { get; }
 
     private FlowaTestServer(WebApplication app, InMemoryLoggerProvider logs, OutgoingRequestRecorder outgoing)
     {
         this.app = app;
         Logs = logs;
-        Outgoing = outgoing;
+        OutgoingRequests = outgoing;
         Client = app.GetTestClient();
     }
 
@@ -41,6 +52,7 @@ public sealed class FlowaTestServer : IAsyncDisposable
         builder.Logging.ClearProviders();
         builder.Logging.AddProvider(logs);
         builder.Services.AddFlowaCommon();
+        builder.Services.AddValidation();
         builder.Services.AddSingleton(outgoing);
         builder.Services.AddHttpClient("external", client => client.BaseAddress = new Uri("http://external.test"))
             .ConfigurePrimaryHttpMessageHandler(services => new FakeOutgoingHandler(services.GetRequiredService<OutgoingRequestRecorder>()));
@@ -56,17 +68,17 @@ public sealed class FlowaTestServer : IAsyncDisposable
     private static void MapRoutes(RouteGroupBuilder api)
     {
         api.MapGet("/object", () => new { name = "flowa", quantity = 3 });
-        api.MapGet("/ok", () => TypedResults.Ok(new Item("PETR4", 10)));
-        api.MapPost("/created", () => TypedResults.Created("/api/items/7", new Item("VALE3", 5)));
-        api.MapPost("/accepted", () => TypedResults.Accepted("/api/items/8", new Item("BLOG11", 2)));
+        api.MapGet("/ok", () => TypedResults.Ok(new OfferQuantity("PETR4", 10)));
+        api.MapPost("/created", () => TypedResults.Created("/api/items/7", new OfferQuantity("VALE3", 5)));
+        api.MapPost("/accepted", () => TypedResults.Accepted("/api/items/8", new OfferQuantity("BLOG11", 2)));
         api.MapGet("/custom-status", (HttpContext context) =>
         {
             context.Response.StatusCode = StatusCodes.Status202Accepted;
-            return new Item("BSCI11", 4);
+            return new OfferQuantity("BSCI11", 4);
         });
         api.MapDelete("/no-content", () => TypedResults.NoContent());
         api.MapGet("/void", () => { });
-        api.MapGet("/ready-envelope", () => Envelope.Success(new Item("VIIA4", 1)));
+        api.MapGet("/ready-envelope", () => Envelope.Success(new OfferQuantity("VIIA4", 1)));
         api.MapGet("/text", () => TypedResults.Text("ola"));
         api.MapGet("/text-conflict", () => TypedResults.Text("Oferta sem estoque.", statusCode: 409));
         api.MapGet("/text-500", () => TypedResults.Text(InternalDetail, statusCode: 500));
@@ -78,7 +90,14 @@ public sealed class FlowaTestServer : IAsyncDisposable
             ["quantity"] = ["Deve ser maior que zero.", "Deve ser menor que 100000."],
             ["code"] = ["Obrigatório."],
         }));
-        api.MapPost("/body", (Item item) => item);
+        api.MapPost("/validation-nested", () => TypedResults.ValidationProblem(new Dictionary<string, string[]>
+        {
+            ["Order.OfferCode"] = ["Informe a oferta."],
+        }));
+        api.MapPost("/body", (OfferQuantity offerQuantity) => offerQuantity);
+        api.MapGet("/quote", (int quantity) => new { quantity });
+        api.MapPost("/conflict-status", (HttpContext context) => { context.Response.StatusCode = StatusCodes.Status409Conflict; });
+        api.MapPost("/validated", (ReservationRequest reservation) => reservation);
         api.MapGet("/not-found", () => TypedResults.NotFound());
         api.MapGet("/conflict", () => TypedResults.Conflict("Estoque insuficiente."));
         api.MapGet("/problem", () => TypedResults.Problem(detail: "Oferta encerrada.", statusCode: 422));

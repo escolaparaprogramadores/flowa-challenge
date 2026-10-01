@@ -195,13 +195,13 @@ public sealed class EnvelopeTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task UnreadableBodyReturns400BadRequestLoggedAsWarning()
+    public async Task UnreadableBodyReturns400BadRequestWithoutErrorLog()
     {
         // Arrange
-        var content = new StringContent("{ isto nao e json", Encoding.UTF8, "application/json");
+        var unreadableJson = new StringContent("{ isto nao e json", Encoding.UTF8, "application/json");
 
         // Act
-        var (response, body) = await server.SendAsync(HttpMethod.Post, "/api/body", "bad-body-id", content);
+        var (response, body) = await server.SendAsync(HttpMethod.Post, "/api/body", "bad-body-id", unreadableJson);
 
         // Assert
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
@@ -209,6 +209,85 @@ public sealed class EnvelopeTests : IAsyncLifetime
         Assert.Equal("Requisição inválida.", body.GetProperty("error").GetProperty("message").GetString());
         Assert.Equal(JsonValueKind.Null, body.GetProperty("data").ValueKind);
         Assert.DoesNotContain(server.Logs.Entries, entry => entry.Level >= LogLevel.Error);
+    }
+
+    [Fact]
+    public async Task MissingBodyReturns400BadRequestNotSuccess()
+    {
+        var (response, body) = await server.SendAsync(HttpMethod.Post, "/api/body", "missing-body-id");
+
+        AssertBadRequestEnvelope(response, body, "missing-body-id");
+    }
+
+    [Theory]
+    [InlineData("/api/quote")]
+    [InlineData("/api/quote?quantity=abc")]
+    public async Task MissingOrInvalidQueryReturns400BadRequestNotSuccess(string path)
+    {
+        var (response, body) = await server.SendAsync(HttpMethod.Get, path, "bad-query-id");
+
+        AssertBadRequestEnvelope(response, body, "bad-query-id");
+    }
+
+    [Fact]
+    public async Task StatusWrittenByRouteWithoutBodyBecomesErrorEnvelope()
+    {
+        var (response, body) = await server.SendAsync(HttpMethod.Post, "/api/conflict-status", "conflict-status-id");
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal(JsonValueKind.Null, body.GetProperty("data").ValueKind);
+        Assert.Equal("CONFLICT", body.GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal("Conflito com o estado atual do recurso.", body.GetProperty("error").GetProperty("message").GetString());
+        Assert.Equal("conflict-status-id", body.GetProperty("meta").GetProperty("correlationId").GetString());
+    }
+
+    [Fact]
+    public async Task NativeValidationReturnsValidationErrorEnvelope()
+    {
+        // Arrange
+        var invalidReservation = new StringContent("""{ "quantity": 0 }""", Encoding.UTF8, "application/json");
+
+        // Act
+        var (response, body) = await server.SendAsync(HttpMethod.Post, "/api/validated", "native-validation-id", invalidReservation);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(["data", "error", "meta"], PropertyNames(body));
+        Assert.Equal(JsonValueKind.Null, body.GetProperty("data").ValueKind);
+        Assert.Equal("VALIDATION_ERROR", body.GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal("Um ou mais campos são inválidos.", body.GetProperty("error").GetProperty("message").GetString());
+        var details = body.GetProperty("error").GetProperty("details").EnumerateArray()
+            .Select(detail => (detail.GetProperty("field").GetString(), detail.GetProperty("message").GetString()))
+            .OrderBy(detail => detail.Item1)
+            .ToList();
+        Assert.Equal(
+            [("offerCode", "Informe a oferta."), ("quantity", "A quantidade deve estar entre 1 e 100000.")],
+            details);
+        Assert.Equal("native-validation-id", body.GetProperty("meta").GetProperty("correlationId").GetString());
+        Assert.Equal("native-validation-id", Assert.Single(response.Headers.GetValues(CorrelationId.HeaderName)));
+    }
+
+    [Fact]
+    public async Task ValidationFieldPathIsConvertedToJsonCamelCase()
+    {
+        var (_, body) = await server.SendAsync(HttpMethod.Post, "/api/validation-nested");
+
+        var detail = Assert.Single(body.GetProperty("error").GetProperty("details").EnumerateArray());
+        Assert.Equal("order.offerCode", detail.GetProperty("field").GetString());
+        Assert.Equal("Informe a oferta.", detail.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task NativeValidationLetsValidRequestThrough()
+    {
+        var validReservation = new StringContent("""{ "offerCode": "BLOG11", "quantity": 10 }""", Encoding.UTF8, "application/json");
+
+        var (response, body) = await server.SendAsync(HttpMethod.Post, "/api/validated", content: validReservation);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("BLOG11", body.GetProperty("data").GetProperty("offerCode").GetString());
+        Assert.Equal(10, body.GetProperty("data").GetProperty("quantity").GetInt32());
     }
 
     [Fact]
@@ -230,7 +309,7 @@ public sealed class EnvelopeTests : IAsyncLifetime
     {
         // Act
         var (response, body) = await server.SendAsync(HttpMethod.Get, "/api/throw", "error-id");
-        var text = body.GetRawText();
+        var envelopeText = body.GetRawText();
 
         // Assert
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
@@ -240,10 +319,10 @@ public sealed class EnvelopeTests : IAsyncLifetime
         Assert.Equal(GenericInternalMessage, body.GetProperty("error").GetProperty("message").GetString());
         Assert.Equal(0, body.GetProperty("error").GetProperty("details").GetArrayLength());
         Assert.Equal("error-id", body.GetProperty("meta").GetProperty("correlationId").GetString());
-        Assert.DoesNotContain("detalhe-interno-do-servidor", text);
-        Assert.DoesNotContain("InvalidOperationException", text);
-        Assert.DoesNotContain(" at ", text);
-        Assert.DoesNotContain(".cs:line", text);
+        Assert.DoesNotContain("detalhe-interno-do-servidor", envelopeText);
+        Assert.DoesNotContain("InvalidOperationException", envelopeText);
+        Assert.DoesNotContain(" at ", envelopeText);
+        Assert.DoesNotContain(".cs:line", envelopeText);
     }
 
     [Fact]
@@ -361,6 +440,16 @@ public sealed class EnvelopeTests : IAsyncLifetime
     {
         Assert.Equal(expectedCode, ErrorCodes.FromStatus(status));
         Assert.Equal(expectedMessage, ErrorCodes.MessageFromStatus(status));
+    }
+
+    private static void AssertBadRequestEnvelope(HttpResponseMessage response, JsonElement body, string expectedCorrelationId)
+    {
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(["data", "error", "meta"], PropertyNames(body));
+        Assert.Equal(JsonValueKind.Null, body.GetProperty("data").ValueKind);
+        Assert.Equal("BAD_REQUEST", body.GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal("Requisição inválida.", body.GetProperty("error").GetProperty("message").GetString());
+        Assert.Equal(expectedCorrelationId, body.GetProperty("meta").GetProperty("correlationId").GetString());
     }
 
     private static string[] PropertyNames(JsonElement element) =>

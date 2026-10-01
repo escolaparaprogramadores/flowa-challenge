@@ -79,68 +79,55 @@ public sealed class EnvelopeFilter : IEndpointFilter
 {
     public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
     {
-        var result = await next(context);
-        return ToEnvelope(result, context.HttpContext);
+        var endpointResult = await next(context);
+        return ToEnvelope(endpointResult, context.HttpContext);
     }
 
-    private static object? ToEnvelope(object? result, HttpContext context)
+    private static object? ToEnvelope(object? endpointResult, HttpContext context)
     {
-        switch (result)
+        // Arquivo, redirecionamento e desafio de autenticação não têm status próprio (o 401/403 sem corpo do
+        // desafio vira envelope no UseStatusCodePages); 1xx e 304 não podem ter corpo. Seguem como estão.
+        if (endpointResult is IResult and not IStatusCodeHttpResult and not EmptyHttpResult
+            || endpointResult is IStatusCodeHttpResult { StatusCode: < 200 or StatusCodes.Status304NotModified })
+            return endpointResult;
+
+        // Sem status no resultado vale o da resposta: falha de binding (corpo ou query ausente/inválido) chega
+        // como EmptyHttpResult com 400 já gravado, e a rota pode gravar o status à mão.
+        var status = (endpointResult as IStatusCodeHttpResult)?.StatusCode ?? context.Response.StatusCode;
+        // 204 não tem corpo; o contrato exige envelope, então vira 200 com data null.
+        if (status is < 200 or StatusCodes.Status204NoContent)
+            status = StatusCodes.Status200OK;
+
+        var returnedData = endpointResult switch
         {
-            case null or EmptyHttpResult:
-                return Write(Envelope.Success(null), DefaultStatus(context));
+            IValueHttpResult valueResult => valueResult.Value,
+            ContentHttpResult textResult => textResult.ResponseContent,
+            IResult => null,
+            _ => endpointResult,
+        };
 
-            case Envelope envelope:
-                return Write(envelope, DefaultStatus(context));
-
-            case IValueHttpResult { Value: HttpValidationProblemDetails validation }:
-                return Write(ValidationError(validation.Errors), StatusCodes.Status400BadRequest);
-
-            case IValueHttpResult { Value: ProblemDetails problem }:
-                var problemStatus = problem.Status ?? StatusCodes.Status500InternalServerError;
-                return Write(ErrorFromStatus(problemStatus, problemStatus >= 500 ? null : problem.Detail ?? problem.Title), problemStatus);
-
-            case ContentHttpResult content:
-                var contentStatus = content.StatusCode ?? DefaultStatus(context);
-                return contentStatus >= 400
-                    ? Write(ErrorFromStatus(contentStatus, contentStatus >= 500 ? null : content.ResponseContent), contentStatus)
-                    : Write(Envelope.Success(content.ResponseContent), contentStatus);
-
-            // Arquivo, redirecionamento e desafio de autenticação não têm status próprio e seguem como estão;
-            // o 401/403 sem corpo do desafio vira envelope no UseStatusCodePages.
-            case IResult when result is not IStatusCodeHttpResult:
-            // 1xx e 304 não podem ter corpo.
-            case IStatusCodeHttpResult { StatusCode: < 200 or StatusCodes.Status304NotModified }:
-                return result;
-
-            case IStatusCodeHttpResult { StatusCode: >= 400 } failed:
-                var errorStatus = failed.StatusCode!.Value;
-                var text = errorStatus >= 500 ? null : (result as IValueHttpResult)?.Value as string;
-                return Write(ErrorFromStatus(errorStatus, text), errorStatus);
-
-            case IStatusCodeHttpResult succeeded:
-                CopyLocation(result, context);
-                var value = (result as IValueHttpResult)?.Value;
-                var successStatus = succeeded.StatusCode ?? DefaultStatus(context);
-                // 204 não tem corpo; o contrato exige envelope, então vira 200 com data null.
-                if (successStatus == StatusCodes.Status204NoContent)
-                    successStatus = StatusCodes.Status200OK;
-                return Write(value as Envelope ?? Envelope.Success(value), successStatus);
-
-            default:
-                return Write(Envelope.Success(result), DefaultStatus(context));
+        if (status < 400)
+        {
+            CopyLocation(endpointResult, context);
+            return ToEnvelopeJsonResult(returnedData as Envelope ?? Envelope.Success(returnedData), status);
         }
-    }
 
-    private static int DefaultStatus(HttpContext context) =>
-        context.Response.StatusCode is >= 200 and < 300 and not StatusCodes.Status204NoContent
-            ? context.Response.StatusCode
-            : StatusCodes.Status200OK;
+        var errorEnvelope = returnedData switch
+        {
+            HttpValidationProblemDetails validation => ValidationError(validation.Errors),
+            _ when status >= 500 => ErrorFromStatus(status),
+            Envelope routeEnvelope => routeEnvelope,
+            ProblemDetails problem => ErrorFromStatus(status, problem.Detail ?? problem.Title),
+            string errorText => ErrorFromStatus(status, errorText),
+            _ => ErrorFromStatus(status),
+        };
+        return ToEnvelopeJsonResult(errorEnvelope, status);
+    }
 
     // Created/Accepted gravam o Location só quando executados; como o resultado é trocado, o header é copiado aqui.
-    private static void CopyLocation(object result, HttpContext context)
+    private static void CopyLocation(object? endpointResult, HttpContext context)
     {
-        if (result.GetType().GetProperty("Location")?.GetValue(result) is string location && location.Length > 0)
+        if (endpointResult?.GetType().GetProperty("Location")?.GetValue(endpointResult) is string location && location.Length > 0)
             context.Response.Headers.Location = location;
     }
 
@@ -148,13 +135,39 @@ public sealed class EnvelopeFilter : IEndpointFilter
         Envelope.Failure(
             ErrorCodes.Validation,
             ErrorCodes.ValidationMessage,
-            errors.SelectMany(field => field.Value.Select(message => new ErrorDetail(field.Key, message))).ToList());
+            errors.SelectMany(field => field.Value.Select(message => new ErrorDetail(ToJsonFieldName(field.Key), message))).ToList());
+
+    // A validação nativa devolve o nome da propriedade C# ("Order.OfferCode"); o cliente conhece o do JSON ("order.offerCode").
+    private static string ToJsonFieldName(string propertyPath) =>
+        string.Join('.', propertyPath.Split('.').Select(segment => JsonNamingPolicy.CamelCase.ConvertName(segment)));
 
     internal static Envelope ErrorFromStatus(int status, string? message = null) =>
         Envelope.Failure(ErrorCodes.FromStatus(status), message ?? ErrorCodes.MessageFromStatus(status));
 
-    internal static IResult Write(Envelope envelope, int status) =>
+    internal static IResult ToEnvelopeJsonResult(Envelope envelope, int status) =>
         Results.Json(envelope, Envelope.JsonOptions, statusCode: status);
+}
+
+/// <summary>
+/// ProblemDetails escrito pelo próprio framework (validação nativa do <c>AddValidation</c>, ProblemHttpResult
+/// fora do grupo) também sai no envelope.
+/// </summary>
+public sealed class EnvelopeProblemDetailsWriter : IProblemDetailsWriter
+{
+    public bool CanWrite(ProblemDetailsContext context) => true;
+
+    public ValueTask WriteAsync(ProblemDetailsContext context)
+    {
+        var status = context.ProblemDetails.Status ?? context.HttpContext.Response.StatusCode;
+        var errorEnvelope = context.ProblemDetails switch
+        {
+            HttpValidationProblemDetails validation => EnvelopeFilter.ValidationError(validation.Errors),
+            _ when status >= 500 => EnvelopeFilter.ErrorFromStatus(status),
+            // O framework preenche Title em inglês ("Bad Request"); só o Detail é texto escrito pela rota.
+            var problem => EnvelopeFilter.ErrorFromStatus(status, problem.Detail),
+        };
+        return new ValueTask(EnvelopeFilter.ToEnvelopeJsonResult(errorEnvelope, status).ExecuteAsync(context.HttpContext));
+    }
 }
 
 /// <summary>Ponto único de erro: exceção não tratada vira envelope, sem stack trace ao cliente.</summary>
@@ -162,7 +175,7 @@ public sealed class EnvelopeExceptionHandler(ILogger<EnvelopeExceptionHandler> l
 {
     public async ValueTask<bool> TryHandleAsync(HttpContext context, Exception exception, CancellationToken cancellationToken)
     {
-        Envelope envelope;
+        Envelope errorEnvelope;
         int status;
 
         if (exception is BadHttpRequestException badRequest)
@@ -170,16 +183,16 @@ public sealed class EnvelopeExceptionHandler(ILogger<EnvelopeExceptionHandler> l
             // Corpo ilegível, parâmetro obrigatório ausente etc.: culpa da entrada, não do serviço.
             logger.LogWarning(exception, "Invalid request");
             status = badRequest.StatusCode;
-            envelope = EnvelopeFilter.ErrorFromStatus(status);
+            errorEnvelope = EnvelopeFilter.ErrorFromStatus(status);
         }
         else
         {
             logger.LogError(exception, "Unexpected error");
             status = StatusCodes.Status500InternalServerError;
-            envelope = Envelope.Failure(ErrorCodes.Internal, ErrorCodes.InternalMessage);
+            errorEnvelope = Envelope.Failure(ErrorCodes.Internal, ErrorCodes.InternalMessage);
         }
 
-        await EnvelopeFilter.Write(envelope, status).ExecuteAsync(context);
+        await EnvelopeFilter.ToEnvelopeJsonResult(errorEnvelope, status).ExecuteAsync(context);
         return true;
     }
 }
@@ -187,9 +200,11 @@ public sealed class EnvelopeExceptionHandler(ILogger<EnvelopeExceptionHandler> l
 /// <summary>Registro da lib num serviço ASP.NET Core.</summary>
 public static class FlowaCommonExtensions
 {
-    /// <summary>Tratador de exceção e id de correlação em toda chamada HTTP de saída.</summary>
+    /// <summary>Tratador de exceção, ProblemDetails no envelope e id de correlação em toda chamada HTTP de saída.</summary>
     public static IServiceCollection AddFlowaCommon(this IServiceCollection services)
     {
+        // Registrado antes do AddProblemDetails para ser o primeiro escritor consultado.
+        services.AddSingleton<IProblemDetailsWriter, EnvelopeProblemDetailsWriter>();
         services.AddProblemDetails();
         services.AddExceptionHandler<EnvelopeExceptionHandler>();
         services.AddTransient<CorrelationIdHandler>();
@@ -208,7 +223,8 @@ public static class FlowaCommonExtensions
         app.UseStatusCodePages(statusContext =>
         {
             var status = statusContext.HttpContext.Response.StatusCode;
-            return EnvelopeFilter.Write(EnvelopeFilter.ErrorFromStatus(status), status).ExecuteAsync(statusContext.HttpContext);
+            return EnvelopeFilter.ToEnvelopeJsonResult(EnvelopeFilter.ErrorFromStatus(status), status)
+                .ExecuteAsync(statusContext.HttpContext);
         });
         return app;
     }

@@ -42,7 +42,7 @@ public sealed class CorrelationIdTests : IAsyncLifetime
 
         // Assert
         var inHeader = Assert.Single(response.Headers.GetValues(CorrelationId.HeaderName));
-        Assert.True(Guid.TryParse(inHeader, out _), $"id gerado não é GUID: {inHeader}");
+        Assert.True(Guid.TryParseExact(inHeader, "D", out _), $"id gerado não é GUID no formato D: {inHeader}");
         Assert.Equal(inHeader, body.GetProperty("meta").GetProperty("correlationId").GetString());
     }
 
@@ -60,7 +60,7 @@ public sealed class CorrelationIdTests : IAsyncLifetime
         // Assert
         var inHeader = Assert.Single(response.Headers.GetValues(CorrelationId.HeaderName));
         Assert.NotEqual(invalid, inHeader);
-        Assert.True(Guid.TryParse(inHeader, out _), $"id gerado não é GUID: {inHeader}");
+        Assert.True(Guid.TryParseExact(inHeader, "D", out _), $"id gerado não é GUID no formato D: {inHeader}");
         Assert.Equal(inHeader, body.GetProperty("meta").GetProperty("correlationId").GetString());
     }
 
@@ -103,7 +103,7 @@ public sealed class CorrelationIdTests : IAsyncLifetime
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal("outgoing-id", Assert.Single(server.Outgoing.ReceivedHeaders));
+        Assert.Equal("outgoing-id", Assert.Single(server.OutgoingRequests.ReceivedHeaders));
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public sealed class CorrelationIdTests : IAsyncLifetime
         var (response, _) = await server.SendAsync(HttpMethod.Get, "/api/call-external");
 
         var created = Assert.Single(response.Headers.GetValues(CorrelationId.HeaderName));
-        Assert.Equal(created, Assert.Single(server.Outgoing.ReceivedHeaders));
+        Assert.Equal(created, Assert.Single(server.OutgoingRequests.ReceivedHeaders));
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public sealed class CorrelationIdTests : IAsyncLifetime
     {
         await server.SendAsync(HttpMethod.Get, "/api/call-external-with-own-id", "incoming-id");
 
-        Assert.Equal("set-by-caller", Assert.Single(server.Outgoing.ReceivedHeaders));
+        Assert.Equal("set-by-caller", Assert.Single(server.OutgoingRequests.ReceivedHeaders));
     }
 
     [Fact]
@@ -176,7 +176,7 @@ public sealed class CorrelationIdTests : IAsyncLifetime
         var result = CorrelationId.NormalizeOrCreate(invalid);
 
         Assert.NotEqual(invalid, result);
-        Assert.True(Guid.TryParse(result, out _), $"id gerado não é GUID: {result}");
+        Assert.True(Guid.TryParseExact(result, "D", out _), $"id gerado não é GUID no formato D: {result}");
     }
 
     [Fact]
