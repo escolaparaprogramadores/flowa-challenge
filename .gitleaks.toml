@@ -1,0 +1,22 @@
+title = "flowa-challenge"
+
+# Todas as regras padrão do gitleaks continuam valendo.
+[extend]
+useDefault = true
+
+# Valor de chave do Datadog logo depois do nome da chave (com =, : ou aspas).
+# Hex solto não é achado: SHA de commit, de action fixada e DD_VERSION são esperados.
+[[rules]]
+id = "datadog-chave-atribuida"
+description = "Valor de API key, APP key ou client token do Datadog atribuído a nome de chave"
+regex = '''(?i)\b(?:dd_api_key|dd_app_key|dd_client_token|api_key|app_key|application_key)\b["']?\s*[:=]\s*["']?([a-f0-9]{40}|[a-f0-9]{32})\b'''
+secretGroup = 1
+keywords = ["dd_api_key", "dd_app_key", "dd_client_token", "api_key", "app_key", "application_key"]
+
+# Client token do Datadog (RUM/logs do navegador) começa com "pub".
+[[rules]]
+id = "datadog-client-token"
+description = "Client token do Datadog"
+regex = '''\b(pub[a-f0-9]{32})\b'''
+secretGroup = 1
+keywords = ["pub"]
