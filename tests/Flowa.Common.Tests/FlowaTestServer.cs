@@ -68,6 +68,7 @@ public sealed class FlowaTestServer : IAsyncDisposable
         MapRoutes(app.MapGroup("/api").WithEnvelope());
         // Fora do grupo: ProblemDetails escrito pelo próprio resultado passa pelo EnvelopeProblemDetailsWriter.
         app.MapGet("/outside/problem-422", () => TypedResults.Problem(detail: "Oferta encerrada.", statusCode: 422));
+        app.MapGet("/outside/problem-404", () => TypedResults.Problem(statusCode: 404));
         app.MapGet("/outside/problem-500", () => TypedResults.Problem(detail: InternalDetail, statusCode: 500));
 
         await app.StartAsync();
@@ -118,6 +119,7 @@ public sealed class FlowaTestServer : IAsyncDisposable
             return new OfferQuantity("CPAB07", 6);
         });
         api.MapGet("/problem-404", () => TypedResults.Problem(statusCode: 404));
+        api.MapGet("/problem-413", () => TypedResults.Problem(statusCode: 413));
         api.MapGet("/dto-with-location", () => new BranchOffice("Centro", "São Paulo"));
         api.MapGet("/problem-title", () => TypedResults.Problem(title: "Prospecto não aceito.", statusCode: 400));
         api.MapGet("/problem-500", () => TypedResults.Problem(detail: InternalDetail, statusCode: 500));

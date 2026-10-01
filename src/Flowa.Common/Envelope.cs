@@ -134,9 +134,17 @@ public sealed class EnvelopeFilter : IEndpointFilter
             context.Response.Headers.Location = location;
     }
 
-    // O framework preenche Title com a frase padrão do status, em inglês ("Not Found"); essa não vai para a tela.
-    internal static string? RouteWrittenText(ProblemDetails problem, int status) =>
-        problem.Detail ?? (problem.Title == ReasonPhrases.GetReasonPhrase(status) ? null : problem.Title);
+    // O framework preenche Title com um texto padrão do status, em inglês ("Not Found", "Content Too Large");
+    // esse não vai para a tela. A tabela do ProblemDetails e a das frases HTTP divergem em alguns status.
+    internal static string? RouteWrittenText(ProblemDetails problem, int status)
+    {
+        if (problem.Detail is not null)
+            return problem.Detail;
+
+        var isFrameworkDefault = problem.Title == TypedResults.Problem(statusCode: status).ProblemDetails.Title
+            || problem.Title == ReasonPhrases.GetReasonPhrase(status);
+        return isFrameworkDefault ? null : problem.Title;
+    }
 
     internal static Envelope ValidationError(IDictionary<string, string[]> errors) =>
         Envelope.Failure(

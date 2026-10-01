@@ -433,6 +433,26 @@ public sealed class EnvelopeTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ProblemWithFrameworkTitleDifferentFromReasonPhraseUsesPortugueseMessage()
+    {
+        var (response, body) = await server.SendAsync(HttpMethod.Get, "/api/problem-413");
+
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
+        Assert.Equal("REQUEST_ERROR", body.GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal("Não foi possível atender à requisição.", body.GetProperty("error").GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task ProblemOutsideGroupWithFrameworkDefaultTitleUsesPortugueseMessage()
+    {
+        var (response, body) = await server.SendAsync(HttpMethod.Get, "/outside/problem-404");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("NOT_FOUND", body.GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal("Recurso não encontrado.", body.GetProperty("error").GetProperty("message").GetString());
+    }
+
+    [Fact]
     public async Task ProblemOutsideGroupWith4xxBecomesEnvelopeWithDetail()
     {
         var (response, body) = await server.SendAsync(HttpMethod.Get, "/outside/problem-422", "outside-422-id");

@@ -37,6 +37,8 @@ consome (frontend, gateway, CloudFront e teste de carga).
   `error.message` é o texto que vai para a tela, em português. `details[].field` é o nome do campo no JSON
   (camelCase, ex.: `order.offerCode`). Erro 5xx sempre leva a mensagem
   genérica, sem detalhe interno nem stack trace.
+- **Erro montado pela rota:** `Envelope.Failure(code, message)` vai com o status de erro explícito
+  (`TypedResults.Json(envelope, statusCode: 422)`). Devolvido sem status, sai 200 — não faça isso.
 - **Sem 204:** rota que não devolve dado responde 200 com `data: null`. Texto puro vai em `data`.
   Só arquivo, redirecionamento e 304 saem sem envelope (nenhuma rota abaixo usa).
 - **Correlation id:** header `X-Correlation-Id`. Entra pela requisição (ou é gerado quando falta ou é
