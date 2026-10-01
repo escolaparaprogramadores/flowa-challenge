@@ -271,8 +271,10 @@ public sealed class EnvelopeTests : IAsyncLifetime
     [Fact]
     public async Task ValidationFieldPathIsConvertedToJsonCamelCase()
     {
-        var (_, body) = await server.SendAsync(HttpMethod.Post, "/api/validation-nested");
+        var (response, body) = await server.SendAsync(HttpMethod.Post, "/api/validation-nested");
 
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("VALIDATION_ERROR", body.GetProperty("error").GetProperty("code").GetString());
         var detail = Assert.Single(body.GetProperty("error").GetProperty("details").EnumerateArray());
         Assert.Equal("order.offerCode", detail.GetProperty("field").GetString());
         Assert.Equal("Informe a oferta.", detail.GetProperty("message").GetString());
@@ -376,6 +378,68 @@ public sealed class EnvelopeTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
         Assert.Equal("UNPROCESSABLE_ENTITY", body.GetProperty("error").GetProperty("code").GetString());
         Assert.Equal("Oferta encerrada.", body.GetProperty("error").GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task DtoFieldNamedLocationIsDataNotHeader()
+    {
+        var (response, body) = await server.SendAsync(HttpMethod.Get, "/api/dto-with-location");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Null(response.Headers.Location);
+        Assert.Equal("São Paulo", body.GetProperty("data").GetProperty("location").GetString());
+    }
+
+    [Fact]
+    public async Task ProblemWithFrameworkDefaultTitleUsesPortugueseMessage()
+    {
+        var (response, body) = await server.SendAsync(HttpMethod.Get, "/api/problem-404");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("NOT_FOUND", body.GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal("Recurso não encontrado.", body.GetProperty("error").GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task ProblemOutsideGroupWith4xxBecomesEnvelopeWithDetail()
+    {
+        var (response, body) = await server.SendAsync(HttpMethod.Get, "/outside/problem-422", "outside-422-id");
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(["data", "error", "meta"], PropertyNames(body));
+        Assert.Equal("UNPROCESSABLE_ENTITY", body.GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal("Oferta encerrada.", body.GetProperty("error").GetProperty("message").GetString());
+        Assert.Equal("outside-422-id", body.GetProperty("meta").GetProperty("correlationId").GetString());
+    }
+
+    [Fact]
+    public async Task ProblemOutsideGroupWith5xxIsGenericWithoutDetail()
+    {
+        var (response, body) = await server.SendAsync(HttpMethod.Get, "/outside/problem-500");
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Equal("INTERNAL_ERROR", body.GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal(GenericInternalMessage, body.GetProperty("error").GetProperty("message").GetString());
+        Assert.DoesNotContain("detalhe-interno-do-servidor", body.GetRawText());
+    }
+
+    [Fact]
+    public async Task NativeValidationStaysInEnvelopeWhenProblemDetailsWasRegisteredFirst()
+    {
+        // Arrange
+        await using var serverWithEarlyProblemDetails = await FlowaTestServer.StartAsync(problemDetailsRegisteredFirst: true);
+        var invalidReservation = new StringContent("""{ "quantity": 0 }""", Encoding.UTF8, "application/json");
+
+        // Act
+        var (response, body) = await serverWithEarlyProblemDetails.SendAsync(HttpMethod.Post, "/api/validated", "early-pd-id", invalidReservation);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("VALIDATION_ERROR", body.GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal(2, body.GetProperty("error").GetProperty("details").GetArrayLength());
+        Assert.Equal("early-pd-id", body.GetProperty("meta").GetProperty("correlationId").GetString());
     }
 
     [Fact]

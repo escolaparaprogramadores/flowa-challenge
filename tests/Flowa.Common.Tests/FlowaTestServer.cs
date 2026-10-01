@@ -13,6 +13,9 @@ namespace Flowa.Common.Tests;
 
 public sealed record OfferQuantity(string Code, int Quantity);
 
+/// <summary>DTO com um campo chamado Location que é dado, não header.</summary>
+public sealed record BranchOffice(string Name, string Location);
+
 /// <summary>Pedido com regras de DataAnnotations, validado pela validação nativa do .NET 10 (AddValidation).</summary>
 public sealed class ReservationRequest
 {
@@ -42,7 +45,8 @@ public sealed class FlowaTestServer : IAsyncDisposable
         Client = app.GetTestClient();
     }
 
-    public static async Task<FlowaTestServer> StartAsync()
+    /// <param name="problemDetailsRegisteredFirst">Simula um serviço que chama AddProblemDetails antes de AddFlowaCommon.</param>
+    public static async Task<FlowaTestServer> StartAsync(bool problemDetailsRegisteredFirst = false)
     {
         var logs = new InMemoryLoggerProvider();
         var outgoing = new OutgoingRequestRecorder();
@@ -51,6 +55,8 @@ public sealed class FlowaTestServer : IAsyncDisposable
         builder.WebHost.UseTestServer();
         builder.Logging.ClearProviders();
         builder.Logging.AddProvider(logs);
+        if (problemDetailsRegisteredFirst)
+            builder.Services.AddProblemDetails();
         builder.Services.AddFlowaCommon();
         builder.Services.AddValidation();
         builder.Services.AddSingleton(outgoing);
@@ -60,6 +66,9 @@ public sealed class FlowaTestServer : IAsyncDisposable
         var app = builder.Build();
         app.UseFlowaCommon();
         MapRoutes(app.MapGroup("/api").WithEnvelope());
+        // Fora do grupo: ProblemDetails escrito pelo próprio resultado passa pelo EnvelopeProblemDetailsWriter.
+        app.MapGet("/outside/problem-422", () => TypedResults.Problem(detail: "Oferta encerrada.", statusCode: 422));
+        app.MapGet("/outside/problem-500", () => TypedResults.Problem(detail: InternalDetail, statusCode: 500));
 
         await app.StartAsync();
         return new FlowaTestServer(app, logs, outgoing);
@@ -101,6 +110,8 @@ public sealed class FlowaTestServer : IAsyncDisposable
         api.MapGet("/not-found", () => TypedResults.NotFound());
         api.MapGet("/conflict", () => TypedResults.Conflict("Estoque insuficiente."));
         api.MapGet("/problem", () => TypedResults.Problem(detail: "Oferta encerrada.", statusCode: 422));
+        api.MapGet("/problem-404", () => TypedResults.Problem(statusCode: 404));
+        api.MapGet("/dto-with-location", () => new BranchOffice("Centro", "São Paulo"));
         api.MapGet("/problem-title", () => TypedResults.Problem(title: "Prospecto não aceito.", statusCode: 400));
         api.MapGet("/problem-500", () => TypedResults.Problem(detail: InternalDetail, statusCode: 500));
         api.MapGet("/internal-error-text", () => TypedResults.InternalServerError(InternalDetail));

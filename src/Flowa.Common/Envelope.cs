@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -117,7 +118,7 @@ public sealed class EnvelopeFilter : IEndpointFilter
             HttpValidationProblemDetails validation => ValidationError(validation.Errors),
             _ when status >= 500 => ErrorFromStatus(status),
             Envelope routeEnvelope => routeEnvelope,
-            ProblemDetails problem => ErrorFromStatus(status, problem.Detail ?? problem.Title),
+            ProblemDetails problem => ErrorFromStatus(status, RouteWrittenText(problem, status)),
             string errorText => ErrorFromStatus(status, errorText),
             _ => ErrorFromStatus(status),
         };
@@ -125,11 +126,16 @@ public sealed class EnvelopeFilter : IEndpointFilter
     }
 
     // Created/Accepted gravam o Location só quando executados; como o resultado é trocado, o header é copiado aqui.
+    // Só de IResult: um DTO devolvido pela rota pode ter um campo Location que não é header.
     private static void CopyLocation(object? endpointResult, HttpContext context)
     {
-        if (endpointResult?.GetType().GetProperty("Location")?.GetValue(endpointResult) is string location && location.Length > 0)
+        if (endpointResult is IResult && endpointResult.GetType().GetProperty("Location")?.GetValue(endpointResult) is string location && location.Length > 0)
             context.Response.Headers.Location = location;
     }
+
+    // O framework preenche Title com a frase padrão do status, em inglês ("Not Found"); essa não vai para a tela.
+    internal static string? RouteWrittenText(ProblemDetails problem, int status) =>
+        problem.Detail ?? (problem.Title == ReasonPhrases.GetReasonPhrase(status) ? null : problem.Title);
 
     internal static Envelope ValidationError(IDictionary<string, string[]> errors) =>
         Envelope.Failure(
@@ -163,8 +169,7 @@ public sealed class EnvelopeProblemDetailsWriter : IProblemDetailsWriter
         {
             HttpValidationProblemDetails validation => EnvelopeFilter.ValidationError(validation.Errors),
             _ when status >= 500 => EnvelopeFilter.ErrorFromStatus(status),
-            // O framework preenche Title em inglês ("Bad Request"); só o Detail é texto escrito pela rota.
-            var problem => EnvelopeFilter.ErrorFromStatus(status, problem.Detail),
+            var problem => EnvelopeFilter.ErrorFromStatus(status, EnvelopeFilter.RouteWrittenText(problem, status)),
         };
         return new ValueTask(EnvelopeFilter.ToEnvelopeJsonResult(errorEnvelope, status).ExecuteAsync(context.HttpContext));
     }
@@ -203,9 +208,9 @@ public static class FlowaCommonExtensions
     /// <summary>Tratador de exceção, ProblemDetails no envelope e id de correlação em toda chamada HTTP de saída.</summary>
     public static IServiceCollection AddFlowaCommon(this IServiceCollection services)
     {
-        // Registrado antes do AddProblemDetails para ser o primeiro escritor consultado.
-        services.AddSingleton<IProblemDetailsWriter, EnvelopeProblemDetailsWriter>();
         services.AddProblemDetails();
+        // Primeiro da lista, para ser o escritor consultado mesmo se o serviço já chamou AddProblemDetails antes.
+        services.Insert(0, ServiceDescriptor.Singleton<IProblemDetailsWriter, EnvelopeProblemDetailsWriter>());
         services.AddExceptionHandler<EnvelopeExceptionHandler>();
         services.AddTransient<CorrelationIdHandler>();
         services.ConfigureHttpClientDefaults(client => client.AddHttpMessageHandler<CorrelationIdHandler>());
