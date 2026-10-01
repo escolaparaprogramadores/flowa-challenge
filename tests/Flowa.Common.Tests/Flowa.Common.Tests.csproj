@@ -17,7 +17,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Flowa.Comum\Flowa.Comum.csproj" />
+    <ProjectReference Include="..\..\src\Flowa.Common\Flowa.Common.csproj" />
   </ItemGroup>
 
 </Project>
